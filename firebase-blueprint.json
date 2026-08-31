@@ -1,0 +1,77 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile containing student, teacher, or admin account details",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "nickname": { "type": "string" },
+        "username": { "type": "string" },
+        "role": { "type": "string", "enum": ["student", "teacher", "admin"] },
+        "avatar": { "type": "string" },
+        "grade": { "type": "number" },
+        "school": { "type": "string" },
+        "accountStatus": { "type": "string", "enum": ["active", "inactive"] },
+        "createdAt": { "type": "string" },
+        "lastActive": { "type": "string" },
+        "lastActiveDate": { "type": "string" },
+        "xp": { "type": "number" },
+        "level": { "type": "number" },
+        "stars": { "type": "number" },
+        "coins": { "type": "number" },
+        "streakDays": { "type": "number" }
+      },
+      "required": ["name", "username", "role", "grade", "accountStatus"]
+    },
+    "Assignment": {
+      "title": "Assignment",
+      "description": "Assignment or task created by teacher or admin for students",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "targetGrade": { "type": "string" },
+        "targetClassId": { "type": "string" },
+        "type": { "type": "string", "enum": ["mission", "practice", "project", "quiz"] },
+        "dueDate": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["title", "description", "targetGrade", "type"]
+    },
+    "Class": {
+      "title": "Class",
+      "description": "Classroom or rombel section with grade level and teachers",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "gradeLevel": { "type": "number" },
+        "section": { "type": "string" },
+        "displayName": { "type": "string" },
+        "academicYear": { "type": "string" },
+        "teacherIds": { "type": "array", "items": { "type": "string" } },
+        "studentCount": { "type": "number" },
+        "isActive": { "type": "boolean" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "gradeLevel", "section", "displayName", "isActive"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profiles collection"
+    },
+    "/assignments/{assignmentId}": {
+      "schema": "Assignment",
+      "description": "Assignments collection for tasks created by teachers and admins"
+    },
+    "/classes/{classId}": {
+      "schema": "Class",
+      "description": "Classroom sections (rombongan belajar) collection"
+    }
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "name": "CodeNusa",
+  "description": "Aplikasi pembelajaran informatika dan CODESign interaktif untuk murid SD kelas 1 sampai 6 dengan robot Kobi, peta petualangan, aktivitas interaktif, dan Studio Coding visual.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
