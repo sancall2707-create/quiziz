@@ -49,5 +49,28 @@ export const STREAK_MILESTONES: Array<{ days: number; badgeId: string; bonusXp: 
 /** Base streak check-in bonus (awarded on every new day check-in). */
 export const STREAK_CHECKIN_BONUS = { xp: 50, coins: 30 };
 
-/** Challenge bonus safety limits — client values are clamped to these bounds. */
-export const CHALLENGE_LIMITS = { maxStars: 100, maxXp: 1000, maxCoins: 1000 };
+/**
+ * Server-side authoritative challenge reward configuration.
+ *
+ * The client sends ONLY challengeId — rewards are looked up here,
+ * never trusted from the client. These IDs match the STUDIO_CHALLENGES
+ * definitions in src/data/studioChallenges.ts.
+ */
+export interface ChallengeReward {
+  rewardXp: number;
+  rewardStars: number;
+  rewardCoins: number;
+  isActive: boolean;
+}
+
+export const CHALLENGE_REWARDS: Record<string, ChallengeReward> = {
+  'ch-easy-1': { rewardXp: 35,  rewardStars: 2, rewardCoins: 20, isActive: true },
+  'ch-easy-2': { rewardXp: 35,  rewardStars: 2, rewardCoins: 20, isActive: true },
+  'ch-easy-3': { rewardXp: 40,  rewardStars: 2, rewardCoins: 20, isActive: true },
+  'ch-med-1':  { rewardXp: 60,  rewardStars: 3, rewardCoins: 30, isActive: true },
+  'ch-med-2':  { rewardXp: 65,  rewardStars: 3, rewardCoins: 30, isActive: true },
+  'ch-med-3':  { rewardXp: 65,  rewardStars: 3, rewardCoins: 30, isActive: true },
+  'ch-hard-1': { rewardXp: 100, rewardStars: 5, rewardCoins: 50, isActive: true },
+  'ch-hard-2': { rewardXp: 110, rewardStars: 5, rewardCoins: 50, isActive: true },
+  'ch-hard-3': { rewardXp: 120, rewardStars: 5, rewardCoins: 50, isActive: true },
+};

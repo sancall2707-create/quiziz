@@ -29,7 +29,7 @@ import {
   DAILY_MISSION_REWARDS,
   STREAK_MILESTONES,
   STREAK_CHECKIN_BONUS,
-  CHALLENGE_LIMITS,
+  CHALLENGE_REWARDS,
 } from './missionRewards';
 
 // Initialize Admin SDK once
@@ -365,28 +365,50 @@ export const submitProgress = onCall(async (request) => {
       }
 
       // ========================================================
-      //  challenge_bonus — range-clamped (no full server config
-      //  available for dynamic challenges). Client values are
-      //  bounded to safe maximums.
+      //  challenge_bonus — SERVER-AUTHORITATIVE rewards.
+      //  Client sends ONLY challengeId. Rewards are looked up
+      //  from CHALLENGE_REWARDS config. Idempotency via
+      //  claimedChallenges array in Firestore transaction.
       // ========================================================
       case 'challenge_bonus': {
         const p = data.payload;
-        const stars = clampInt(p.stars, 0, CHALLENGE_LIMITS.maxStars, 0);
-        const xp = clampInt(p.xp, 0, CHALLENGE_LIMITS.maxXp, 0);
-        const coins = clampInt(p.coins, 0, CHALLENGE_LIMITS.maxCoins, 0);
+        const challengeId = isNonEmptyString(p.challengeId, 100) ? (p.challengeId as string) : null;
+        if (!challengeId) throw new HttpsError('invalid-argument', 'challengeId tidak valid.');
+
+        // Look up reward config server-side — never trust client values
+        const reward = CHALLENGE_REWARDS[challengeId];
+        if (!reward) {
+          throw new HttpsError('not-found', 'Tantangan tidak ditemukan dalam konfigurasi server.');
+        }
+        if (!reward.isActive) {
+          throw new HttpsError('failed-precondition', 'Tantangan tidak aktif.');
+        }
 
         const result = await firestore.runTransaction(async (tx: Transaction) => {
           const snap = await tx.get(userRef);
           if (!snap.exists) throw new HttpsError('not-found', 'Profil pengguna tidak ditemukan.');
           const profile = snap.data() as Record<string, unknown>;
 
-          const newXp = num(profile.xp, 0) + xp;
+          // Idempotency: check if challenge reward already claimed
+          const claimedChallenges = strArr(profile.claimedChallenges);
+          if (claimedChallenges.includes(challengeId)) {
+            return { success: true, alreadyClaimed: true };
+          }
+
+          // Compute rewards from server config
+          const xpEarned = reward.rewardXp;
+          const starsEarned = reward.rewardStars;
+          const coinsEarned = reward.rewardCoins;
+          const newXp = num(profile.xp, 0) + xpEarned;
+          const updatedClaimed = Array.from(new Set([...claimedChallenges, challengeId]));
+
           tx.set(userRef, {
             xp: newXp, level: Math.floor(newXp / 250) + 1,
-            stars: num(profile.stars, 0) + stars,
-            coins: num(profile.coins, 0) + coins,
+            stars: num(profile.stars, 0) + starsEarned,
+            coins: num(profile.coins, 0) + coinsEarned,
+            claimedChallenges: updatedClaimed,
           }, { merge: true });
-          return { success: true };
+          return { success: true, alreadyClaimed: false };
         });
 
         return result;
@@ -533,11 +555,18 @@ export const setUserRole = onCall(async (request) => {
   const validClassIds = isStringArray(teacherClassIds, 30, 50) ? (teacherClassIds as string[]) : [];
 
   try {
-    const claims: Record<string, unknown> = { role };
+    // Preserve ALL existing custom claims — only update role + teacherClassIds
+    const user = await auth.getUser(uid);
+    const existingClaims = (user.customClaims || {}) as Record<string, unknown>;
+    const claims: Record<string, unknown> = { ...existingClaims, role };
     if (role === 'teacher') {
       claims.teacherClassIds = validClassIds;
+    } else if ('teacherClassIds' in claims) {
+      // Remove teacherClassIds when demoting away from teacher
+      delete claims.teacherClassIds;
     }
     await auth.setCustomUserClaims(uid, claims);
+
     const updateData: Record<string, unknown> = { role };
     if (role === 'teacher') {
       updateData.teacherClassIds = validClassIds;

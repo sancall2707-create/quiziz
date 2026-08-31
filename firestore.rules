@@ -90,7 +90,8 @@ service cloud.firestore {
         && !('streakHistory' in data)
         && !('lastActiveDate' in data)
         && !('completedMissions' in data)
-        && !('missionScores' in data);
+        && !('missionScores' in data)
+        && !('claimedChallenges' in data);
     }
 
     // ============================================================

@@ -89,7 +89,7 @@ interface AppContextType {
   streakInfo: StreakInfo;
   checkInStreak: () => { streakCount: number; isFirstToday: boolean; bonusXp: number; bonusCoins: number; newBadge?: Badge };
   recordDailyActivity: (reason?: string) => void;
-  awardChallengeBonus: (stars: number, xp: number, challengeTitle: string) => void;
+  awardChallengeBonus: (challengeId: string, challengeTitle: string, displayStars: number, displayXp: number) => void;
   // Offline & Service Worker functionalities
   networkStatus: NetworkStatusState;
   offlineQueue: OfflineProgressRecord[];
