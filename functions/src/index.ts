@@ -170,7 +170,7 @@ export const submitProgress = onCall(async (request) => {
           // Idempotency: check if reward already claimed
           const rewardsClaimed = strArr(profile.rewardsClaimed);
           if (rewardsClaimed.includes(missionId)) {
-            return { success: true, alreadyClaimed: true };
+            return { success: true, alreadyClaimed: true, rewardXp: 0, rewardStars: 0, rewardCoins: 0 };
           }
 
           // Compute rewards from server config
@@ -206,7 +206,11 @@ export const submitProgress = onCall(async (request) => {
           if (kobiPosition) update.kobiPosition = kobiPosition;
 
           tx.set(userRef, update, { merge: true });
-          return { success: true, alreadyClaimed: false };
+          return {
+            success: true, alreadyClaimed: false,
+            rewardXp: xpEarned, rewardStars: starsEarned, rewardCoins: coinsEarned,
+            newXp, newStars: num(profile.stars, 0) + starsEarned, newCoins: num(profile.coins, 0) + coinsEarned,
+          };
         });
 
         return result;

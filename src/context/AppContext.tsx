@@ -547,12 +547,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   //  When the function is not deployed, the call fails gracefully
   //  and local state updates optimistically.
   // ============================================================
-  const submitProgressToBackend = useCallback(async (type: string, payload: Record<string, unknown>) => {
+  const submitProgressToBackend = useCallback(async (type: string, payload: Record<string, unknown>): Promise<Record<string, unknown> | null> => {
     try {
-      const submitProgress = httpsCallable<{ type: string; payload: Record<string, unknown> }, unknown>(functions, 'submitProgress');
-      await submitProgress({ type, payload });
+      const submitProgress = httpsCallable<{ type: string; payload: Record<string, unknown> }, Record<string, unknown>>(functions, 'submitProgress');
+      const result = await submitProgress({ type, payload });
+      return result.data;
     } catch (err) {
       console.warn(`[submitProgress:${type}] Cloud Function unavailable or failed:`, err);
+      return null;
     }
   }, []);
 
@@ -937,9 +939,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             completedMissions: completed, rewardsClaimed: updatedClaimed, kobiPosition: newKobiNode, badges: updatedBadges,
             missionScores: { ...u.missionScores, [missionId]: { stars: Math.max(stars, u.missionScores?.[missionId]?.stars || 0), score: Math.max(score, u.missionScores?.[missionId]?.score || 0), completedAt: new Date().toISOString() } }
           };
-          // Route through Cloud Function — server looks up rewards from config.
-          // Client sends only missionId + performance metrics (stars, score) + kobiPosition.
-          submitProgressToBackend('mission_complete', { missionId, stars, score, kobiPosition: newKobiNode });
           return userUpdated;
         }
         return u;
@@ -947,6 +946,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       persistUsers(updated);
       return updated;
     });
+
+    // Send to backend and reconcile: if alreadyClaimed or failed, rollback reward.
+    if (!isAlreadyClaimed) {
+      submitProgressToBackend('mission_complete', { missionId, stars, score, kobiPosition: newKobiNode }).then(result => {
+        if (!result || result.alreadyClaimed) {
+          setAllUsers(prev => {
+            const updated = prev.map(u => {
+              if (u.id === currentUserId) {
+                const rolledXp = Math.max(0, u.xp - xpEarned);
+                const rolledBadges = newBadge ? u.badges.filter(b => b !== newBadge.id) : u.badges;
+                return { ...u, xp: rolledXp, level: Math.floor(rolledXp / 250) + 1, stars: Math.max(0, u.stars - starsEarned), coins: Math.max(0, u.coins - coinsEarned), rewardsClaimed: (u.rewardsClaimed || []).filter(r => r !== missionId), badges: rolledBadges };
+              }
+              return u;
+            });
+            persistUsers(updated);
+            return updated;
+          });
+        }
+      });
+    }
 
     let isOfflineSaved = false;
     if (isOffline) {
@@ -1085,29 +1104,46 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const dismissKobiSpeech = () => { setKobiSpeech(null); audioService.stopSpeaking(); };
 
-  const awardChallengeBonus = (stars: number, xp: number, challengeTitle: string) => {
+  const awardChallengeBonus = (challengeId: string, challengeTitle: string, displayStars: number, displayXp: number) => {
+    const displayCoins = displayStars * 10;
+    // Optimistic update for immediate UI feedback
     setAllUsers(prev => {
       const updated = prev.map(u => {
         if (u.id === currentUserId) {
-          const newXp = u.xp + xp;
+          const newXp = u.xp + displayXp;
           const newLevel = Math.floor(newXp / 250) + 1;
-          const userUpdated: User = { ...u, xp: newXp, level: newLevel, stars: u.stars + stars, coins: u.coins + (stars * 10) };
-          submitProgressToBackend('challenge_bonus', { stars, xp, coins: stars * 10, challengeTitle });
-          return userUpdated;
+          return { ...u, xp: newXp, level: newLevel, stars: u.stars + displayStars, coins: u.coins + displayCoins };
         }
         return u;
       });
       persistUsers(updated);
       return updated;
     });
+    // Send ONLY challengeId to backend — rewards computed server-side.
+    // Reconcile: if alreadyClaimed or backend failed, rollback optimistic update.
+    submitProgressToBackend('challenge_bonus', { challengeId }).then(result => {
+      if (!result || result.alreadyClaimed) {
+        setAllUsers(prev => {
+          const updated = prev.map(u => {
+            if (u.id === currentUserId) {
+              const rolledXp = Math.max(0, u.xp - displayXp);
+              return { ...u, xp: rolledXp, level: Math.floor(rolledXp / 250) + 1, stars: Math.max(0, u.stars - displayStars), coins: Math.max(0, u.coins - displayCoins) };
+            }
+            return u;
+          });
+          persistUsers(updated);
+          return updated;
+        });
+      }
+    });
     if (isOffline) {
-      const offRec = saveToOfflineQueue({ type: 'challenge_complete', userId: currentUserId, title: `Tantangan Algoritma: ${challengeTitle}`, subtitle: `+${stars} Bintang • +${xp} XP`, payload: { challengeId: challengeTitle, stars, xpEarned: xp, coinsEarned: stars * 10, timestamp: new Date().toISOString() } });
+      const offRec = saveToOfflineQueue({ type: 'challenge_complete', userId: currentUserId, title: `Tantangan Algoritma: ${challengeTitle}`, subtitle: `+${displayStars} Bintang • +${displayXp} XP`, payload: { challengeId, timestamp: new Date().toISOString() } });
       setOfflineQueue(q => [offRec, ...q]);
       getStorageEstimate().then(setStorageEstimate);
     }
     audioService.playFanfare();
     recordDailyActivity(`Tantangan: ${challengeTitle}`);
-    triggerKobiSpeech(`Hebat sekali! Kamu menyelesaikan tantangan "${challengeTitle}" dan meraih +${stars} Bintang & +${xp} XP!`, 'celebrating', true);
+    triggerKobiSpeech(`Hebat sekali! Kamu menyelesaikan tantangan "${challengeTitle}" dan meraih +${displayStars} Bintang & +${displayXp} XP!`, 'celebrating', true);
   };
 
   const resetProgress = () => {
