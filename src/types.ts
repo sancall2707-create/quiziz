@@ -28,6 +28,7 @@ export interface User {
   avatarType?: AvatarType;
   bio?: string;
   updatedAt?: string;
+  mustChangePassword?: boolean;
   email?: string | null;
   grade: ClassGrade;
   gradeLevel?: ClassGrade;

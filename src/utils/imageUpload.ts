@@ -108,7 +108,7 @@ export async function uploadAvatarToStorage(
   dataUrlFallback: string
 ): Promise<string> {
   const timestamp = Date.now();
-  const storagePath = `avatars/${userId}_${timestamp}.jpg`;
+  const storagePath = `avatars/${userId}/${timestamp}.jpg`;
   
   try {
     const storageRef = ref(storage, storagePath);

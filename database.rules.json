@@ -1,0 +1,35 @@
+{
+  "rules": {
+    "users": {
+      ".read": "auth.token.role === 'admin'",
+      ".indexOn": ["classId", "role"],
+      "$uid": {
+        ".read": "auth.uid === $uid || auth.token.role === 'admin' || (auth.token.role === 'teacher' && root.child('teacherClasses/' + auth.uid + '/' + data.child('classId').val()).exists())",
+        ".write": "auth.uid === $uid || auth.token.role === 'admin'",
+        ".validate": "auth.token.role === 'admin' || !data.exists() || (newData.child('role').val() === data.child('role').val() && newData.child('xp').val() === data.child('xp').val() && newData.child('level').val() === data.child('level').val() && newData.child('stars').val() === data.child('stars').val() && newData.child('coins').val() === data.child('coins').val() && newData.child('classId').val() === data.child('classId').val() && newData.child('grade').val() === data.child('grade').val() && newData.child('gradeLevel').val() === data.child('gradeLevel').val() && newData.child('section').val() === data.child('section').val() && newData.child('accountStatus').val() === data.child('accountStatus').val() && newData.child('claimedChallenges').val() === data.child('claimedChallenges').val() && newData.child('rewardsClaimed').val() === data.child('rewardsClaimed').val() && newData.child('completedMissions').val() === data.child('completedMissions').val() && newData.child('badges').val() === data.child('badges').val() && newData.child('mustChangePassword').val() === data.child('mustChangePassword').val())"
+      }
+    },
+    "classStudents": {
+      "$classId": {
+        ".read": "auth.token.role === 'admin' || root.child('teacherClasses/' + auth.uid + '/' + $classId).exists()",
+        "$uid": {
+          ".write": "auth.token.role === 'admin' || (auth.uid === $uid && !data.exists())"
+        }
+      }
+    },
+    "teacherClasses": {
+      "$teacherUid": {
+        ".read": "auth.uid === $teacherUid || auth.token.role === 'admin'",
+        "$classId": {
+          ".write": "auth.token.role === 'admin'"
+        }
+      }
+    },
+    "assignments": {
+      ".read": "auth != null",
+      "$assignmentId": {
+        ".write": "auth.token.role === 'admin'"
+      }
+    }
+  }
+}

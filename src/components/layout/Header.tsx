@@ -22,7 +22,7 @@ import { UserAvatar } from '../common/UserAvatar';
 import { EditProfileModal } from '../profile/EditProfileModal';
 
 export const Header: React.FC = () => {
-  const { currentUser, updateSettings, triggerKobiSpeech, allUsers, switchUser, streakInfo, logout } = useApp();
+  const { currentUser, updateSettings, triggerKobiSpeech, streakInfo, logout } = useApp();
   const navigate = useNavigate();
   const [showNotifications, setShowNotifications] = useState(false);
   const [showUserDropdown, setShowUserDropdown] = useState(false);
@@ -70,23 +70,6 @@ export const Header: React.FC = () => {
     updateSettings({ narrationVoiceEnabled: nextVal });
     if (nextVal) {
       triggerKobiSpeech('Suara narasi Kobi diaktifkan!', 'happy', true);
-    }
-  };
-
-  const handleSwitchAccount = (targetUserId: string) => {
-    const targetUser = allUsers.find(u => u.id === targetUserId);
-    switchUser(targetUserId);
-    setShowUserDropdown(false);
-    audioService.playSnapSound();
-
-    if (targetUser) {
-      if (targetUser.role === 'student') {
-        navigate('/student/home');
-      } else if (targetUser.role === 'teacher') {
-        navigate('/teacher/dashboard');
-      } else if (targetUser.role === 'admin') {
-        navigate('/admin/dashboard');
-      }
     }
   };
 

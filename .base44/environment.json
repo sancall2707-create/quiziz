@@ -1,0 +1,11 @@
+{
+  "previewPort": 3000,
+  "healthPath": "/",
+  "startCommand": "docker compose -f docker-compose.base44.yml up -d",
+  "secrets": [
+    {"name": "VITE_FIREBASE_API_KEY", "description": "Firebase web app API key (Firebase console → Project settings → General → Your apps → Web app → apiKey).", "requiredAtBoot": true},
+    {"name": "VITE_FIREBASE_APP_ID", "description": "Firebase web app ID (Firebase console → Project settings → General → Your apps → Web app → appId).", "requiredAtBoot": true},
+    {"name": "VITE_FIREBASE_MESSAGING_SENDER_ID", "description": "Firebase messaging sender ID (Firebase console → Project settings → General → Your apps → Web app → messagingSenderId).", "requiredAtBoot": true},
+    {"name": "VITE_FIREBASE_STORAGE_BUCKET", "description": "Firebase Storage bucket name (Firebase console → Project settings → General → Your apps → Web app → storageBucket).", "requiredAtBoot": true}
+  ]
+}

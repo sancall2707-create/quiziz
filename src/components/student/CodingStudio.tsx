@@ -402,9 +402,10 @@ export const CodingStudio: React.FC = () => {
             // ignore
           }
           awardChallengeBonus(
+            activeChallenge.id,
+            activeChallenge.title,
             activeChallenge.rewardStars,
-            activeChallenge.rewardXp,
-            activeChallenge.title
+            activeChallenge.rewardXp
           );
         } else {
           audioService.playFanfare();

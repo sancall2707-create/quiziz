@@ -1,0 +1,39 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // ============================================================
+    //  Avatars — users can only manage their own avatar.
+    //  Admins can override (e.g. remove inappropriate content).
+    // ============================================================
+    match /avatars/{userId}/{fileName} {
+      // Read: anyone can view avatars (public profile pictures).
+      allow read: if true;
+
+      // Write: only the authenticated owner, image MIME only, <= 2 MB.
+      // Admin can also write (override inappropriate avatars).
+      allow write: if request.auth != null
+        && (
+          request.auth.uid == userId
+          || request.auth.token.role == 'admin'
+        )
+        && request.resource.size < 2 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+
+      // Delete: only the owner or admin.
+      allow delete: if request.auth != null
+        && (
+          request.auth.uid == userId
+          || request.auth.token.role == 'admin'
+        );
+    }
+
+    // ============================================================
+    //  Deny everything else
+    // ============================================================
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

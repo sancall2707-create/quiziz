@@ -9,7 +9,15 @@ interface RoleGuardProps {
 }
 
 export const RoleGuard: React.FC<RoleGuardProps> = ({ allowedRoles, children }) => {
-  const { currentUser, isAuthenticated } = useApp();
+  const { currentUser, isAuthenticated, authLoading } = useApp();
+
+  if (authLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#f9f9ff]">
+        <div className="w-12 h-12 border-4 border-[#adc6ff] border-t-[#0058be] rounded-full animate-spin" />
+      </div>
+    );
+  }
 
   if (!isAuthenticated) {
     return <Navigate to="/login" replace />;
