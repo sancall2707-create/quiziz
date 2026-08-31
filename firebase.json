@@ -1,7 +1,8 @@
 {
   "firestore": {
     "rules": "firestore.rules",
-    "database": "ai-studio-codenusa-deaefbe9-a722-44d6-9e2c-1855cb2c502e"
+    "database": "ai-studio-codenusa-deaefbe9-a722-44d6-9e2c-1855cb2c502e",
+    "indexes": "firestore.indexes.json"
   },
   "storage": {
     "rules": "storage.rules"

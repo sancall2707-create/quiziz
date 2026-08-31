@@ -52,6 +52,11 @@ const https_1 = require("firebase-functions/v2/https");
 const identity_1 = require("firebase-functions/identity");
 const firebase_functions_1 = require("firebase-functions");
 const firestore_1 = require("firebase-admin/firestore");
+const options_1 = require("firebase-functions/v2/options");
+// Set default region for callable functions — must match frontend's
+// getFunctions(app, 'asia-southeast1').  Blocking Auth functions
+// (beforeUserCreated) override to us-central1 as required by Identity Platform.
+(0, options_1.setGlobalOptions)({ region: 'asia-southeast1', maxInstances: 10 });
 const missionRewards_1 = require("./missionRewards");
 // Initialize Admin SDK once
 if (admin.apps.length === 0) {
@@ -100,7 +105,7 @@ function getYesterdayStr() {
 //  Admin SDK createUser (used by createStaffAccount) does NOT trigger this.
 //  Public registration always produces role=student — no client input trusted.
 // ============================================================
-exports.setStudentClaimOnCreate = (0, identity_1.beforeUserCreated)(async (event) => {
+exports.setStudentClaimOnCreate = (0, identity_1.beforeUserCreated)({ region: 'us-central1' }, async (event) => {
     // Set the student custom claim. Since this runs before the user is saved,
     // there are no existing claims to check — always set student for public
     // registrations.
