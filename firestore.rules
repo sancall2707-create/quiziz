@@ -33,9 +33,26 @@ service cloud.firestore {
       return isSignedIn() && (tokenRole() == 'student' || tokenRole() == null);
     }
 
+    // Teacher's assigned class IDs from custom claims.
+    // Returns null if not set — the `in` check will fail (deny by default).
+    function teacherClassIds() {
+      return request.auth.token.teacherClassIds;
+    }
+
+    // Check if a student's classId is in the teacher's assigned classes.
+    function isStudentInTeacherClass(studentClassId) {
+      return isTeacher()
+        && teacherClassIds() != null
+        && studentClassId is string
+        && studentClassId in teacherClassIds();
+    }
+
     // Fields a student/teacher/admin may write on their own profile.
-    // System / reward fields (role, xp, level, stars, coins, badges, grade,
-    // classId, accountStatus, passwordHash, username, email) are NOT included.
+    // System / reward / authorization fields are NOT included:
+    //   role, xp, level, stars, coins, badges, grade, classId, section,
+    //   className, accountStatus, passwordHash, username, email,
+    //   teacherClassIds, rewardsClaimed, dailyClaimed, completedMissions,
+    //   missionScores, streakDays, streakHistory, lastActiveDate
     function onlySelfEditableFields(data) {
       return data.keys().hasOnly([
         'name', 'fullName', 'nickname', 'displayName',
@@ -44,14 +61,36 @@ service cloud.firestore {
       ]);
     }
 
-    // mustChangePassword may only be set to false by the user (never to true).
     function mustChangePasswordOnlyFalse(data) {
       return !('mustChangePassword' in data) || data.mustChangePassword == false;
     }
 
-    // No password or passwordHash field may ever exist in any document.
     function noPasswordFields(data) {
       return !('passwordHash' in data) && !('password' in data);
+    }
+
+    // No authorization-sensitive fields in self-writes.
+    function noAuthFields(data) {
+      return !('role' in data)
+        && !('classId' in data)
+        && !('grade' in data)
+        && !('gradeLevel' in data)
+        && !('section' in data)
+        && !('className' in data)
+        && !('teacherClassIds' in data)
+        && !('accountStatus' in data)
+        && !('rewardsClaimed' in data)
+        && !('dailyClaimed' in data)
+        && !('xp' in data)
+        && !('level' in data)
+        && !('stars' in data)
+        && !('coins' in data)
+        && !('badges' in data)
+        && !('streakDays' in data)
+        && !('streakHistory' in data)
+        && !('lastActiveDate' in data)
+        && !('completedMissions' in data)
+        && !('missionScores' in data);
     }
 
     // ============================================================
@@ -61,22 +100,22 @@ service cloud.firestore {
       // ---- READ ----
       // Own profile: any signed-in user.
       // Admin: reads all users.
-      // Teacher: reads all student docs.
-      //   (TODO: restrict to assigned classes when classIds are added to
-        //   teacher custom claims — for now teachers can read all students.)
+      // Teacher: reads ONLY students in their assigned classes
+      //   (verified via custom claims — NOT client-writable doc).
       allow read: if isSignedIn() && (
-        request.auth.uid == userId ||
-        isAdmin() ||
-        (isTeacher() && resource.data.role == 'student')
+        request.auth.uid == userId
+        || isAdmin()
+        || isStudentInTeacherClass(resource.data.classId)
       );
 
       // ---- CREATE ----
       // Only on registration: student creates own profile doc.
-      // Validates initial values to prevent inflated XP/stars/coins on creation.
+      // Validates initial values to prevent inflated XP/stars/coins.
       allow create: if isSignedIn()
         && request.auth.uid == userId
         && isStudent()
         && noPasswordFields(request.resource.data)
+        && noAuthFields(request.resource.data)
         && request.resource.data.role is string
         && request.resource.data.role == 'student'
         && request.resource.data.username is string
@@ -93,19 +132,19 @@ service cloud.firestore {
         && request.resource.data.grade <= 6;
 
       // ---- UPDATE (self — any role) ----
-      // A user may update their own profile, but only the self-editable
+      // A user may update their own profile, but ONLY self-editable
       // fields. Role, XP, stars, coins, level, badges, grade, classId,
-      // accountStatus, username, email — all BLOCKED.
-      // Protected-field writes go through the submitProgress Cloud Function.
+      // accountStatus, teacherClassIds, rewardsClaimed, dailyClaimed —
+      // ALL BLOCKED. Protected-field writes go through Cloud Functions.
       allow update: if isSignedIn()
         && request.auth.uid == userId
         && onlySelfEditableFields(request.resource.data)
         && mustChangePasswordOnlyFalse(request.resource.data)
-        && noPasswordFields(request.resource.data);
+        && noPasswordFields(request.resource.data)
+        && noAuthFields(request.resource.data);
 
       // ---- UPDATE (admin — any user) ----
-      // Admin can update any user's doc (system operations).
-      // Still never allow password fields.
+      // Admin can update any user's doc. Still never allow password fields.
       allow update: if isAdmin()
         && noPasswordFields(request.resource.data);
 
@@ -140,12 +179,17 @@ service cloud.firestore {
 
     // ============================================================
     //  classes/{classId}
+    //  Teachers can read classes in their assigned list (custom claims)
+    //  OR classes where their UID is in teacherIds (backward compat).
     // ============================================================
     match /classes/{classId} {
       allow read: if isSignedIn() && (
-        isAdmin() ||
-        (isTeacher() && request.auth.uid in resource.data.teacherIds) ||
-        (isStudent() && request.auth.uid in resource.data.studentIds)
+        isAdmin()
+        || (isTeacher() && (
+          request.auth.uid in resource.data.teacherIds
+          || (teacherClassIds() != null && classId in teacherClassIds())
+        ))
+        || (isStudent() && request.auth.uid in resource.data.studentIds)
       );
 
       allow create, update, delete: if isAdmin();

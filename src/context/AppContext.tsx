@@ -46,7 +46,9 @@ import {
   doc,
   setDoc,
   deleteDoc,
-  getDoc
+  getDoc,
+  query,
+  where
 } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 
@@ -165,6 +167,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
   const [currentUserId, setCurrentUserId] = useState<string>('');
   const [trustedRole, setTrustedRole] = useState<UserRole | null>(null);
+  const [teacherClassIds, setTeacherClassIds] = useState<string[]>([]);
   const [mustChangePassword, setMustChangePassword] = useState<boolean>(false);
 
   // UI cache for allUsers (NOT used for auth decisions — just for dashboards/leaderboard rendering)
@@ -265,14 +268,35 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       if (firebaseUser) {
-        // 1. Read trusted role from custom claims (NOT from any client-writable doc)
-        let role: UserRole = 'student';
-        try {
-          const tokenResult = await firebaseUser.getIdTokenResult();
-          role = (tokenResult.claims.role as UserRole) || 'student';
-        } catch (tokenErr) {
-          // Token may be invalid/revoked (e.g. account disabled) — sign out
-          console.warn('Token refresh failed, signing out:', tokenErr);
+        // 1. Read trusted role from custom claims (NOT from any client-writable doc).
+        //    Retry with forced token refresh until the claim is available — the
+        //    onUserCreate Cloud Function may not have set it yet on first login
+        //    after registration. Do NOT default to a role as authorization fallback.
+        //    Show a provisioning/loading state (authLoading stays true) until the
+        //    claim arrives or timeout is reached.
+        let role: UserRole | null = null;
+        let claimClassIds: string[] = [];
+        let tokenFailed = false;
+
+        for (let attempt = 0; attempt < 6; attempt++) {
+          try {
+            const tokenResult = await firebaseUser.getIdTokenResult(attempt > 0);
+            if (tokenResult.claims.role) {
+              role = tokenResult.claims.role as UserRole;
+              claimClassIds = (tokenResult.claims.teacherClassIds as string[]) || [];
+              break;
+            }
+            // Claim not yet available — wait and retry with forced refresh
+            if (attempt < 5) await new Promise(res => setTimeout(res, 1000));
+          } catch (tokenErr) {
+            // Token invalid/revoked (e.g. account disabled) — sign out
+            console.warn('Token refresh failed, signing out:', tokenErr);
+            tokenFailed = true;
+            break;
+          }
+        }
+
+        if (tokenFailed) {
           await signOutUser();
           setTrustedRole(null);
           setCurrentUserId('');
@@ -281,7 +305,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           setAuthLoading(false);
           return;
         }
+
+        if (!role) {
+          // Claim provisioning timeout — do NOT grant access based on assumed role.
+          setAuthError('Akun Anda sedang disiapkan. Silakan coba masuk kembali dalam beberapa saat.');
+          await signOutUser();
+          setTrustedRole(null);
+          setCurrentUserId('');
+          setIsAuthenticated(false);
+          setAuthLoading(false);
+          return;
+        }
+
         setTrustedRole(role);
+        setTeacherClassIds(claimClassIds);
 
         // 2. Fetch Firestore profile by Firebase UID — no fallback to first user or admin
         try {
@@ -338,6 +375,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       } else {
         // No authenticated user
         setTrustedRole(null);
+        setTeacherClassIds([]);
         setCurrentUserId('');
         setIsAuthenticated(false);
         setMustChangePassword(false);
@@ -357,8 +395,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const unsubFns: Array<() => void> = [];
 
-    if (trustedRole === 'admin' || trustedRole === 'teacher') {
-      // Staff: listen to all users (admin: all; teacher: filtered to students by rules)
+    if (trustedRole === 'admin') {
+      // Admin: listen to all users
       unsubFns.push(
         onSnapshot(
           collection(db, 'users'),
@@ -369,7 +407,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               if (u && u.id) users.push(u);
             });
             setAllUsers(prev => {
-              // Merge: keep any user not in the snapshot (e.g. own profile if rules restrict)
               const snapshotIds = new Set(users.map(u => u.id));
               const retained = prev.filter(u => !snapshotIds.has(u.id));
               return [...users, ...retained];
@@ -379,6 +416,72 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         )
       );
 
+      unsubFns.push(
+        onSnapshot(
+          collection(db, 'assignments'),
+          (snapshot) => {
+            const list: Assignment[] = [];
+            snapshot.forEach((docSnap) => {
+              const a = docSnap.data() as Assignment;
+              if (a && a.id) list.push(a);
+            });
+            setAssignments(list);
+            try { localStorage.setItem(ASSIGNMENTS_STORAGE_KEY, JSON.stringify(list)); } catch { /* ignore */ }
+          },
+          (error) => handleFirestoreError(error, OperationType.LIST, 'assignments')
+        )
+      );
+    } else if (trustedRole === 'teacher') {
+      // Teacher: listen to students in assigned classes only (filtered by custom claims)
+      if (teacherClassIds.length > 0) {
+        const studentQuery = query(
+          collection(db, 'users'),
+          where('role', '==', 'student'),
+          where('classId', 'in', teacherClassIds)
+        );
+        unsubFns.push(
+          onSnapshot(
+            studentQuery,
+            (snapshot) => {
+              const users: User[] = [];
+              snapshot.forEach((docSnap) => {
+                const u = docSnap.data() as User;
+                if (u && u.id) users.push(u);
+              });
+              setAllUsers(prev => {
+                const snapshotIds = new Set(users.map(u => u.id));
+                const retained = prev.filter(u => !snapshotIds.has(u.id) && u.id !== currentUserId);
+                return [...users, ...retained];
+              });
+            },
+            (error) => handleFirestoreError(error, OperationType.LIST, 'users')
+          )
+        );
+      }
+
+      // Teacher's own profile (real-time updates)
+      unsubFns.push(
+        onSnapshot(
+          doc(db, 'users', currentUserId),
+          (docSnap) => {
+            if (docSnap.exists()) {
+              const profile = docSnap.data() as User;
+              setAllUsers(prev => {
+                const idx = prev.findIndex(u => u.id === currentUserId);
+                if (idx >= 0) {
+                  const copy = [...prev];
+                  copy[idx] = profile;
+                  return copy;
+                }
+                return [...prev, profile];
+              });
+            }
+          },
+          (error) => handleFirestoreError(error, OperationType.GET, `users/${currentUserId}`)
+        )
+      );
+
+      // Assignments (learning content — all staff can read)
       unsubFns.push(
         onSnapshot(
           collection(db, 'assignments'),
@@ -436,7 +539,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     return () => unsubFns.forEach(fn => fn());
-  }, [isAuthenticated, currentUserId, trustedRole]);
+  }, [isAuthenticated, currentUserId, trustedRole, teacherClassIds]);
 
   // ============================================================
   //  Progress sync — routes protected-field writes through a
@@ -608,7 +711,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const newHistory = Array.from(new Set([...history, todayStr]));
         const updatedUser: User = { ...u, streakDays: newStreak, streakHistory: newHistory, lastActive: 'Hari ini', lastActiveDate: todayStr, coins: u.coins + bonusCoins, xp: u.xp + bonusXp, badges: newBadges };
         // Route through Cloud Function — students cannot write these fields directly
-        submitProgressToBackend('daily_activity', { reason, bonusCoins, bonusXp, newBadges: newBadges.filter(b => !u.badges.includes(b)), streakDays: newStreak, streakHistory: newHistory, lastActiveDate: todayStr });
+        // Server computes streak, bonus, and badges — client sends only the reason
+        submitProgressToBackend('daily_activity', { reason });
         return updatedUser;
       }
       return u;
@@ -641,7 +745,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const newBadges = milestoneBadge && !u.badges.includes(milestoneBadge.id) ? [...u.badges, milestoneBadge.id] : u.badges;
         const newHistory = Array.from(new Set([...(u.streakHistory || []), todayStr]));
         const updatedUser: User = { ...u, streakDays: newStreak, streakHistory: newHistory, lastActive: 'Hari ini', lastActiveDate: todayStr, xp: u.xp + bonusXp + (milestoneBadge ? 100 : 0), coins: u.coins + bonusCoins + (milestoneBadge ? 50 : 0), badges: newBadges };
-        submitProgressToBackend('streak_checkin', { streakDays: newStreak, streakHistory: newHistory, lastActiveDate: todayStr, bonusXp: bonusXp + (milestoneBadge ? 100 : 0), bonusCoins: bonusCoins + (milestoneBadge ? 50 : 0), badgeId: milestoneBadge?.id });
+        // Server computes everything — client sends nothing but the type
+        submitProgressToBackend('streak_checkin', {});
         return updatedUser;
       }
       return u;
@@ -688,9 +793,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setAllUsers(prev => prev.find(u => u.id === res.user!.id) ? prev : [...prev, res.user!]);
       triggerKobiSpeech(`Selamat datang di CodeNusa, ${data.nickname || data.name}! Ayo mulai petualangan kodingmu!`, 'celebrating', true);
       // Force token refresh after a short delay so the `student` custom claim
-      // (set by the onUserCreate Cloud Function) is picked up.  If the claim
-      // isn't set yet, the onAuthStateChanged handler defaults to 'student'
-      // which is correct for public registration.
+      // (set by the onUserCreate Cloud Function) is picked up. The
+      // onAuthStateChanged handler retries until the claim is available
+      // (provisioning state) — it does NOT default to an assumed role.
       setTimeout(async () => {
         try {
           if (auth.currentUser) {
@@ -734,12 +839,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const adminUpdateUserGrade = (userId: string, grade: ClassGrade) => {
+    // Optimistic local state update
     setAllUsers(prev => {
       const updated = prev.map(u => u.id === userId ? { ...u, grade } : u);
-      try { const userRef = doc(db, 'users', userId); setDoc(userRef, { grade }, { merge: true }); } catch { /* ignore */ }
       persistUsers(updated);
       return updated;
     });
+    // Route through Cloud Function — server validates authorization
+    // (admin: any student; teacher: only students in their assigned classes)
+    const targetUser = allUsers.find(u => u.id === userId);
+    const section = targetUser?.section || 'A';
+    const classId = `cls-${grade}${section.toLowerCase()}`;
+    try {
+      const changeGrade = httpsCallable<{ targetUid: string; grade: number; section?: string; classId?: string }, unknown>(functions, 'changeStudentGrade');
+      changeGrade({ targetUid: userId, grade, section, classId }).catch(() => {});
+    } catch { /* non-critical — optimistic update already applied */ }
   };
 
   const updateSettings = (newSettings: Partial<AccessibilitySettings>) => {
@@ -823,8 +937,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             completedMissions: completed, rewardsClaimed: updatedClaimed, kobiPosition: newKobiNode, badges: updatedBadges,
             missionScores: { ...u.missionScores, [missionId]: { stars: Math.max(stars, u.missionScores?.[missionId]?.stars || 0), score: Math.max(score, u.missionScores?.[missionId]?.score || 0), completedAt: new Date().toISOString() } }
           };
-          // Route through Cloud Function — students cannot write xp/stars/coins/level/badges directly
-          submitProgressToBackend('mission_complete', { missionId, stars, score, xpEarned, coinsEarned, starsEarned, badgeId: newBadge?.id, kobiPosition: newKobiNode, completedAt: new Date().toISOString() });
+          // Route through Cloud Function — server looks up rewards from config.
+          // Client sends only missionId + performance metrics (stars, score) + kobiPosition.
+          submitProgressToBackend('mission_complete', { missionId, stars, score, kobiPosition: newKobiNode });
           return userUpdated;
         }
         return u;
@@ -878,7 +993,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             const updatedUsers = uList.map(u => {
               if (u.id === currentUserId) {
                 const userUpdated: User = { ...u, stars: u.stars + dm.rewardStars, coins: u.coins + dm.rewardCoins };
-                submitProgressToBackend('daily_claim', { missionId: dm.id, stars: dm.rewardStars, coins: dm.rewardCoins });
+                // Server looks up daily mission rewards from config — client sends only missionId
+                submitProgressToBackend('daily_claim', { missionId: dm.id });
                 return userUpdated;
               }
               return u;
