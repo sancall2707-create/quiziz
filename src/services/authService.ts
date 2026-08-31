@@ -7,14 +7,7 @@ import {
   signOut as firebaseSignOut,
   updatePassword as firebaseUpdatePassword
 } from 'firebase/auth';
-import {
-  doc,
-  setDoc,
-  collection,
-  query,
-  where,
-  getDocs
-} from 'firebase/firestore';
+import { doc, setDoc } from 'firebase/firestore';
 
 export interface RegisterStudentData {
   name: string;
@@ -73,7 +66,8 @@ export async function registerStudentFirebase(
     if (err.code === 'auth/weak-password') {
       return { success: false, message: 'Kata sandi terlalu lemah. Minimal 8 karakter.' };
     }
-    return { success: false, message: 'Pendaftaran gagal: ' + (err.message || 'kesalahan Firebase Auth.') };
+    console.warn('[registerStudentFirebase] Auth error:', err.code || err.message);
+    return { success: false, message: 'Pendaftaran gagal. Silakan coba lagi.' };
   }
 
   const avatars = [
@@ -189,7 +183,8 @@ export async function signInWithIdentifier(
     if (err.code === 'auth/network-request-failed') {
       return { success: false, message: 'Koneksi bermasalah. Periksa internet Anda.' };
     }
-    return { success: false, message: 'Gagal masuk: ' + (err.message || 'kesalahan tidak dikenal.') };
+    console.warn('[signInWithIdentifier] Auth error:', err.code || err.message);
+    return { success: false, message: 'Gagal masuk. Silakan periksa koneksi internet dan coba lagi.' };
   }
 }
 

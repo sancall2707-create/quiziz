@@ -270,15 +270,42 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         try {
           const tokenResult = await firebaseUser.getIdTokenResult();
           role = (tokenResult.claims.role as UserRole) || 'student';
-        } catch { /* default to student */ }
+        } catch (tokenErr) {
+          // Token may be invalid/revoked (e.g. account disabled) — sign out
+          console.warn('Token refresh failed, signing out:', tokenErr);
+          await signOutUser();
+          setTrustedRole(null);
+          setCurrentUserId('');
+          setIsAuthenticated(false);
+          setAuthError('Sesi Anda telah berakhir. Silakan masuk kembali.');
+          setAuthLoading(false);
+          return;
+        }
         setTrustedRole(role);
 
         // 2. Fetch Firestore profile by Firebase UID — no fallback to first user or admin
         try {
           const userDocRef = doc(db, 'users', firebaseUser.uid);
-          const userSnap = await getDoc(userDocRef);
+          let userSnap = await getDoc(userDocRef);
+          if (!userSnap.exists()) {
+            // Race condition guard: the user may have JUST registered and the
+            // Firestore profile write may still be in flight.  Retry once after
+            // a short delay before declaring "profile not found".
+            await new Promise(res => setTimeout(res, 1500));
+            userSnap = await getDoc(userDocRef);
+          }
           if (userSnap.exists()) {
             const profile = userSnap.data() as User;
+            // Check for disabled account — admin may have set accountStatus to 'inactive'
+            if (profile.accountStatus === 'inactive') {
+              setAuthError('Akun Anda telah dinonaktifkan. Hubungi administrator untuk informasi lebih lanjut.');
+              await signOutUser();
+              setIsAuthenticated(false);
+              setCurrentUserId('');
+              setTrustedRole(null);
+              setAuthLoading(false);
+              return;
+            }
             setAllUsers(prev => {
               const idx = prev.findIndex(u => u.id === firebaseUser.uid);
               if (idx >= 0) {
@@ -293,7 +320,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             setMustChangePassword(Boolean(profile.mustChangePassword));
             setAuthError(null);
           } else {
-            // Profile not found — show error, sign out, do NOT create a fake session
+            // Profile genuinely not found — show error, sign out, do NOT create a fake session
             setAuthError('Profil pengguna tidak ditemukan untuk akun ini. Hubungi administrator untuk membuat profil Anda.');
             await signOutUser();
             setIsAuthenticated(false);
@@ -660,6 +687,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       // onAuthStateChanged will set currentUserId — add to local state immediately
       setAllUsers(prev => prev.find(u => u.id === res.user!.id) ? prev : [...prev, res.user!]);
       triggerKobiSpeech(`Selamat datang di CodeNusa, ${data.nickname || data.name}! Ayo mulai petualangan kodingmu!`, 'celebrating', true);
+      // Force token refresh after a short delay so the `student` custom claim
+      // (set by the onUserCreate Cloud Function) is picked up.  If the claim
+      // isn't set yet, the onAuthStateChanged handler defaults to 'student'
+      // which is correct for public registration.
+      setTimeout(async () => {
+        try {
+          if (auth.currentUser) {
+            await auth.currentUser.getIdToken(true);
+          }
+        } catch { /* non-critical */ }
+      }, 2000);
     }
     return res;
   };
