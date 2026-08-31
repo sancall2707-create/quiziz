@@ -15,8 +15,8 @@ import { fileURLToPath } from 'url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, '..');
 
-const EXPECTED_PROJECT = 'copper-yew-zt8c4';
-const EXPECTED_DB = 'ai-studio-codenusa-deaefbe9-a722-44d6-9e2c-1855cb2c502e';
+const EXPECTED_PROJECT = 'codenusa-1c6ab';
+const EXPECTED_RTDB_URL = 'https://codenusa-1c6ab-default-rtdb.asia-southeast1.firebasedatabase.app/';
 
 const PASS = '\x1b[32m✅\x1b[0m';
 const FAIL = '\x1b[31m❌\x1b[0m';
@@ -42,6 +42,7 @@ function warn(label, detail = '') {
 
 console.log('\n═══════════════════════════════════════════');
 console.log('  CodeNusa Firebase Pre-Flight Check');
+console.log('  Project: codenusa-1c6ab');
 console.log('═══════════════════════════════════════════\n');
 
 // 1. Firebase CLI available
@@ -72,10 +73,10 @@ try {
 let activeProject = '';
 try {
   activeProject = execSync('firebase use', { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
-  const match = activeProject.match(/copper-yew-zt8c4/);
+  const match = activeProject.match(/codenusa-1c6ab/);
   check('Active project sesuai CodeNusa', !!match, activeProject || 'tidak ada project aktif');
 } catch {
-  check('Active project sesuai CodeNusa', false, 'Jalankan: firebase use copper-yew-zt8c4');
+  check('Active project sesuai CodeNusa', false, 'Jalankan: firebase use codenusa-1c6ab');
   errors++;
 }
 
@@ -100,21 +101,15 @@ check('firebase.json tersedia', existsSync(firebaseJsonPath));
 if (existsSync(firebaseJsonPath)) {
   try {
     const fj = JSON.parse(readFileSync(firebaseJsonPath, 'utf-8'));
-    check('firebase.json: firestore.rules', !!fj.firestore?.rules);
-    check('firebase.json: firestore.indexes', !!fj.firestore?.indexes, fj.firestore?.indexes ? '' : 'tambahkan "indexes": "firestore.indexes.json"');
-    check('firebase.json: firestore.database', !!fj.firestore?.database);
-    check('firebase.json: storage.rules', !!fj.storage?.rules);
+    check('firebase.json: database.rules', !!fj.database?.rules);
     check('firebase.json: functions.source', !!fj.functions?.source);
-    if (fj.firestore?.database) {
-      check('Firestore database ID sesuai', fj.firestore.database === EXPECTED_DB, `ditemukan: ${fj.firestore.database}`);
-    }
   } catch {
     check('firebase.json valid JSON', false);
   }
 }
 
 // 6. Deployment files
-const files = ['firestore.rules', 'firestore.indexes.json', 'storage.rules'];
+const files = ['database.rules.json', 'firestore.rules', 'firestore.indexes.json', 'storage.rules'];
 for (const f of files) {
   check(`${f} tersedia`, existsSync(resolve(root, f)));
 }
@@ -133,7 +128,13 @@ try {
   errors++;
 }
 
-// 9. Identity Platform readiness
+// 9. Firebase web config (env vars)
+const envApiKey = process.env.VITE_FIREBASE_API_KEY;
+const envAppId = process.env.VITE_FIREBASE_APP_ID;
+check('VITE_FIREBASE_API_KEY tersedia', !!envApiKey, 'Set di Firebase Console → Project Settings → Web App');
+check('VITE_FIREBASE_APP_ID tersedia', !!envAppId, 'Set di Firebase Console → Project Settings → Web App');
+
+// 10. Identity Platform readiness
 warn('PERLU VERIFIKASI MANUAL: Pastikan Identity Platform / Auth Blocking Functions aktif di Firebase Console.');
 warn('  Firebase Console → Authentication → Settings → Identity Platform');
 warn('  Blocking function beforeUserCreated membutuhkan capability ini.');

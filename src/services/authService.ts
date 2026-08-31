@@ -1,5 +1,5 @@
 import { User, ClassGrade } from '../types';
-import { auth, db, handleFirestoreError, OperationType } from '../lib/firebase';
+import { auth, database } from '../lib/firebase';
 import { generateClassId, formatClassDisplayName } from '../data/classData';
 import {
   createUserWithEmailAndPassword,
@@ -7,7 +7,7 @@ import {
   signOut as firebaseSignOut,
   updatePassword as firebaseUpdatePassword
 } from 'firebase/auth';
-import { doc, setDoc } from 'firebase/firestore';
+import { ref, set, update } from 'firebase/database';
 
 export interface RegisterStudentData {
   name: string;
@@ -24,16 +24,16 @@ export interface RegisterStudentData {
 /**
  * Deterministically derive an internal email from a username.
  * All CodeNusa accounts use this format so that the login page can construct
- * the email from the username alone — no Firestore lookup needed before auth.
+ * the email from the username alone — no database lookup needed before auth.
  */
 export const getInternalEmail = (username: string) => {
   return `${username.trim().toLowerCase()}@siswa.codenusa.internal`;
 };
 
 /**
- * Register a new student account using Firebase Auth + Firestore.
+ * Register a new student account using Firebase Auth + Realtime Database.
  * Firebase Auth handles credential verification — NO password hashes are stored
- * in Firestore, localStorage, sessionStorage, or source code.
+ * in the database, localStorage, sessionStorage, or source code.
  */
 export async function registerStudentFirebase(
   data: RegisterStudentData,
@@ -45,8 +45,7 @@ export async function registerStudentFirebase(
     return { success: false, message: 'Username minimal 4 karakter.' };
   }
 
-  // 1. Check local uniqueness (Firestore query may be blocked by rules before auth,
-  //    but Firebase Auth email uniqueness is the real guard).
+  // 1. Check local uniqueness (Firebase Auth email uniqueness is the real guard).
   const localExists = allUsers.some(u => u.username.toLowerCase() === cleanUsername);
   if (localExists) {
     return { success: false, message: 'Username sudah digunakan oleh akun lain.' };
@@ -131,12 +130,13 @@ export async function registerStudentFirebase(
     }
   };
 
-  // 3. Save profile into Firestore users/{uid}
+  // 3. Save profile into Realtime Database users/{uid}
   try {
-    const userDocRef = doc(db, 'users', uid);
-    await setDoc(userDocRef, newStudent);
+    await set(ref(database, 'users/' + uid), newStudent);
+    // Also add to classStudents index for teacher queries
+    await set(ref(database, 'classStudents/' + effectiveClassId + '/' + uid), true);
   } catch (err) {
-    handleFirestoreError(err, OperationType.WRITE, `users/${uid}`);
+    console.error('[registerStudentFirebase] RTDB write error:', err);
     return {
       success: false,
       message: 'Akun berhasil dibuat tetapi gagal menyimpan profil. Silakan hubungi admin untuk memeriksa data Anda.'
@@ -149,7 +149,7 @@ export async function registerStudentFirebase(
 /**
  * Sign in using username + password via Firebase Auth.
  * The username is converted to an internal email deterministically —
- * no Firestore read is needed before authentication.
+ * no database read is needed before authentication.
  */
 export async function signInWithIdentifier(
   identifier: string,
@@ -204,10 +204,9 @@ export async function changeCurrentUserPassword(
 
   try {
     await firebaseUpdatePassword(auth.currentUser, newPassword.trim());
-    // Clear the mustChangePassword flag in Firestore (allowed by rules — user can set false only)
+    // Clear the mustChangePassword flag in Realtime Database
     try {
-      const userRef = doc(db, 'users', auth.currentUser.uid);
-      await setDoc(userRef, { mustChangePassword: false }, { merge: true });
+      await update(ref(database, 'users/' + auth.currentUser.uid), { mustChangePassword: false });
     } catch {
       // Non-critical — the password was already changed in Firebase Auth
     }

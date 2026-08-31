@@ -1,62 +1,44 @@
-import { initializeApp, getApps } from 'firebase/app';
-import { getAuth } from 'firebase/auth';
-import { getFirestore, doc, getDocFromServer } from 'firebase/firestore';
-import { getStorage } from 'firebase/storage';
-import { getFunctions } from 'firebase/functions';
+import { initializeApp, getApps, type FirebaseApp } from 'firebase/app';
+import { getAuth, type Auth } from 'firebase/auth';
+import { getDatabase, type Database } from 'firebase/database';
+import { getStorage, type FirebaseStorage } from 'firebase/storage';
+import { getFunctions, type Functions } from 'firebase/functions';
 import firebaseConfig from '../../firebase-applet-config.json';
 
-const app = !getApps().length ? initializeApp(firebaseConfig) : getApps()[0];
+// ============================================================
+//  Firebase configuration — merge env vars (VITE_FIREBASE_*) with
+//  firebase-applet-config.json.  Env vars take precedence.
+//  Project: codenusa-1c6ab
+//  Database: Firebase Realtime Database (asia-southeast1)
+// ============================================================
+const config = {
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || firebaseConfig.apiKey,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || firebaseConfig.authDomain,
+  databaseURL: import.meta.env.VITE_FIREBASE_DATABASE_URL || firebaseConfig.databaseURL,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || firebaseConfig.projectId,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || firebaseConfig.storageBucket,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || firebaseConfig.messagingSenderId,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID || firebaseConfig.appId,
+};
 
-// CRITICAL: The app must specify firestoreDatabaseId
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
-export const auth = getAuth(app);
-export const storage = getStorage(app);
-export const functions = getFunctions(app, 'asia-southeast1');
-
-export enum OperationType {
-  CREATE = 'create',
-  UPDATE = 'update',
-  DELETE = 'delete',
-  LIST = 'list',
-  GET = 'get',
-  WRITE = 'write',
+// Warn if config is incomplete
+if (!config.apiKey) {
+  console.error('FIREBASE CONFIG BELUM LENGKAP: VITE_FIREBASE_API_KEY diperlukan.');
+}
+if (!config.appId) {
+  console.error('FIREBASE CONFIG BELUM LENGKAP: VITE_FIREBASE_APP_ID diperlukan.');
 }
 
-export interface FirestoreErrorInfo {
-  error: string;
-  operationType: OperationType;
-  path: string | null;
-  authInfo: {
-    userId?: string | null;
-    email?: string | null;
-    emailVerified?: boolean | null;
-    isAnonymous?: boolean | null;
-  };
-}
+const app: FirebaseApp = !getApps().length ? initializeApp(config) : getApps()[0];
 
-export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
-  const errInfo: FirestoreErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
-    authInfo: {
-      userId: auth.currentUser?.uid,
-      email: auth.currentUser?.email,
-      emailVerified: auth.currentUser?.emailVerified,
-      isAnonymous: auth.currentUser?.isAnonymous,
-    },
-    operationType,
-    path,
-  };
-  console.error('Firestore Error:', JSON.stringify(errInfo));
-  return errInfo;
-}
+// Auth — Firebase Authentication
+export const auth: Auth = getAuth(app);
 
-// Test initial connection
-export async function testFirestoreConnection() {
-  try {
-    await getDocFromServer(doc(db, 'test', 'connection'));
-  } catch (error) {
-    if (error instanceof Error && error.message.includes('the client is offline')) {
-      console.warn('Firestore client offline or connection pending.');
-    }
-  }
-}
+// Realtime Database — primary data store (users, assignments, indexes)
+export const database: Database = getDatabase(app);
+
+// Storage — avatar uploads
+export const storage: FirebaseStorage = getStorage(app);
+
+// Functions — Cloud Functions (asia-southeast1)
+export const functions: Functions = getFunctions(app, 'asia-southeast1');

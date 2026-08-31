@@ -38,18 +38,16 @@ import {
   signOutUser,
   changeCurrentUserPassword
 } from '../services/authService';
-import { db, auth, functions, handleFirestoreError, OperationType } from '../lib/firebase';
+import { database, auth, functions } from '../lib/firebase';
 import { onAuthStateChanged } from 'firebase/auth';
 import {
-  collection,
-  onSnapshot,
-  doc,
-  setDoc,
-  deleteDoc,
-  getDoc,
-  query,
-  where
-} from 'firebase/firestore';
+  ref,
+  onValue,
+  get,
+  set,
+  update,
+  remove
+} from 'firebase/database';
 import { httpsCallable } from 'firebase/functions';
 
 interface KobiSpeechState {
@@ -320,19 +318,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setTrustedRole(role);
         setTeacherClassIds(claimClassIds);
 
-        // 2. Fetch Firestore profile by Firebase UID — no fallback to first user or admin
+        // 2. Fetch Realtime Database profile by Firebase UID
         try {
-          const userDocRef = doc(db, 'users', firebaseUser.uid);
-          let userSnap = await getDoc(userDocRef);
+          const userRef = ref(database, 'users/' + firebaseUser.uid);
+          let userSnap = await get(userRef);
           if (!userSnap.exists()) {
             // Race condition guard: the user may have JUST registered and the
-            // Firestore profile write may still be in flight.  Retry once after
+            // RTDB profile write may still be in flight.  Retry once after
             // a short delay before declaring "profile not found".
             await new Promise(res => setTimeout(res, 1500));
-            userSnap = await getDoc(userDocRef);
+            userSnap = await get(userRef);
           }
           if (userSnap.exists()) {
-            const profile = userSnap.data() as User;
+            const profile = userSnap.val() as User;
             // Check for disabled account — admin may have set accountStatus to 'inactive'
             if (profile.accountStatus === 'inactive') {
               setAuthError('Akun Anda telah dinonaktifkan. Hubungi administrator untuk informasi lebih lanjut.');
@@ -365,9 +363,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             setTrustedRole(null);
           }
         } catch (err) {
-          // Firestore read failed (rules not deployed yet, network error, etc.)
-          handleFirestoreError(err, OperationType.GET, `users/${firebaseUser.uid}`);
-          setAuthError('Gagal memuat profil pengguna. Pastikan Firebase Rules sudah dideploy dan koneksi internet tersedia.');
+          // RTDB read failed (rules not deployed yet, network error, etc.)
+          console.error('RTDB profile read error:', err);
+          setAuthError('Gagal memuat profil pengguna. Pastikan database.rules.json sudah dideploy dan koneksi internet tersedia.');
           setIsAuthenticated(false);
           setCurrentUserId('');
           setTrustedRole(null);
@@ -396,14 +394,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const unsubFns: Array<() => void> = [];
 
     if (trustedRole === 'admin') {
-      // Admin: listen to all users
+      // Admin: listen to all users (RTDB rule allows admin to read /users)
       unsubFns.push(
-        onSnapshot(
-          collection(db, 'users'),
+        onValue(
+          ref(database, 'users'),
           (snapshot) => {
             const users: User[] = [];
-            snapshot.forEach((docSnap) => {
-              const u = docSnap.data() as User;
+            snapshot.forEach((childSnap) => {
+              const u = childSnap.val() as User;
               if (u && u.id) users.push(u);
             });
             setAllUsers(prev => {
@@ -412,60 +410,86 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               return [...users, ...retained];
             });
           },
-          (error) => handleFirestoreError(error, OperationType.LIST, 'users')
+          (error) => console.error('RTDB users listener error:', error)
         )
       );
 
       unsubFns.push(
-        onSnapshot(
-          collection(db, 'assignments'),
+        onValue(
+          ref(database, 'assignments'),
           (snapshot) => {
             const list: Assignment[] = [];
-            snapshot.forEach((docSnap) => {
-              const a = docSnap.data() as Assignment;
+            snapshot.forEach((childSnap) => {
+              const a = childSnap.val() as Assignment;
               if (a && a.id) list.push(a);
             });
             setAssignments(list);
             try { localStorage.setItem(ASSIGNMENTS_STORAGE_KEY, JSON.stringify(list)); } catch { /* ignore */ }
           },
-          (error) => handleFirestoreError(error, OperationType.LIST, 'assignments')
+          (error) => console.error('RTDB assignments listener error:', error)
         )
       );
     } else if (trustedRole === 'teacher') {
-      // Teacher: listen to students in assigned classes only (filtered by custom claims)
-      if (teacherClassIds.length > 0) {
-        const studentQuery = query(
-          collection(db, 'users'),
-          where('role', '==', 'student'),
-          where('classId', 'in', teacherClassIds)
-        );
+      // Teacher: listen to classStudents index for each assigned class,
+      // then listen to each student's profile for real-time updates.
+      // RTDB rules enforce that teacher can only read students in their classes.
+      const studentProfileListeners = new Map<string, () => void>();
+
+      teacherClassIds.forEach(classId => {
         unsubFns.push(
-          onSnapshot(
-            studentQuery,
+          onValue(
+            ref(database, 'classStudents/' + classId),
             (snapshot) => {
-              const users: User[] = [];
-              snapshot.forEach((docSnap) => {
-                const u = docSnap.data() as User;
-                if (u && u.id) users.push(u);
+              const uids = Object.keys(snapshot.val() || {});
+              // Clean up listeners for students no longer in class
+              studentProfileListeners.forEach((unsub, uid) => {
+                if (!uids.includes(uid)) {
+                  unsub();
+                  studentProfileListeners.delete(uid);
+                }
               });
-              setAllUsers(prev => {
-                const snapshotIds = new Set(users.map(u => u.id));
-                const retained = prev.filter(u => !snapshotIds.has(u.id) && u.id !== currentUserId);
-                return [...users, ...retained];
+              // Set up listeners for new students
+              uids.forEach(uid => {
+                if (!studentProfileListeners.has(uid)) {
+                  const unsubFn = onValue(
+                    ref(database, 'users/' + uid),
+                    (profileSnap) => {
+                      if (profileSnap.exists()) {
+                        const profile = profileSnap.val() as User;
+                        setAllUsers(prev => {
+                          const idx = prev.findIndex(u => u.id === uid);
+                          if (idx >= 0) {
+                            const copy = [...prev];
+                            copy[idx] = profile;
+                            return copy;
+                          }
+                          return [...prev, profile];
+                        });
+                      }
+                    }
+                  );
+                  studentProfileListeners.set(uid, unsubFn);
+                }
               });
             },
-            (error) => handleFirestoreError(error, OperationType.LIST, 'users')
+            (error) => console.error('RTDB classStudents listener error:', error)
           )
         );
-      }
+      });
+
+      // Clean up all student profile listeners on unmount
+      unsubFns.push(() => {
+        studentProfileListeners.forEach(unsub => unsub());
+        studentProfileListeners.clear();
+      });
 
       // Teacher's own profile (real-time updates)
       unsubFns.push(
-        onSnapshot(
-          doc(db, 'users', currentUserId),
-          (docSnap) => {
-            if (docSnap.exists()) {
-              const profile = docSnap.data() as User;
+        onValue(
+          ref(database, 'users/' + currentUserId),
+          (snap) => {
+            if (snap.exists()) {
+              const profile = snap.val() as User;
               setAllUsers(prev => {
                 const idx = prev.findIndex(u => u.id === currentUserId);
                 if (idx >= 0) {
@@ -477,34 +501,34 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               });
             }
           },
-          (error) => handleFirestoreError(error, OperationType.GET, `users/${currentUserId}`)
+          (error) => console.error('RTDB own profile listener error:', error)
         )
       );
 
       // Assignments (learning content — all staff can read)
       unsubFns.push(
-        onSnapshot(
-          collection(db, 'assignments'),
+        onValue(
+          ref(database, 'assignments'),
           (snapshot) => {
             const list: Assignment[] = [];
-            snapshot.forEach((docSnap) => {
-              const a = docSnap.data() as Assignment;
+            snapshot.forEach((childSnap) => {
+              const a = childSnap.val() as Assignment;
               if (a && a.id) list.push(a);
             });
             setAssignments(list);
             try { localStorage.setItem(ASSIGNMENTS_STORAGE_KEY, JSON.stringify(list)); } catch { /* ignore */ }
           },
-          (error) => handleFirestoreError(error, OperationType.LIST, 'assignments')
+          (error) => console.error('RTDB assignments listener error:', error)
         )
       );
     } else {
       // Student: listen to own profile only
       unsubFns.push(
-        onSnapshot(
-          doc(db, 'users', currentUserId),
-          (docSnap) => {
-            if (docSnap.exists()) {
-              const profile = docSnap.data() as User;
+        onValue(
+          ref(database, 'users/' + currentUserId),
+          (snap) => {
+            if (snap.exists()) {
+              const profile = snap.val() as User;
               setAllUsers(prev => {
                 const idx = prev.findIndex(u => u.id === currentUserId);
                 if (idx >= 0) {
@@ -516,24 +540,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               });
             }
           },
-          (error) => handleFirestoreError(error, OperationType.GET, `users/${currentUserId}`)
+          (error) => console.error('RTDB student profile listener error:', error)
         )
       );
 
       // Students can read all assignments (learning content — filtered by grade in UI)
       unsubFns.push(
-        onSnapshot(
-          collection(db, 'assignments'),
+        onValue(
+          ref(database, 'assignments'),
           (snapshot) => {
             const list: Assignment[] = [];
-            snapshot.forEach((docSnap) => {
-              const a = docSnap.data() as Assignment;
+            snapshot.forEach((childSnap) => {
+              const a = childSnap.val() as Assignment;
               if (a && a.id) list.push(a);
             });
             setAssignments(list);
             try { localStorage.setItem(ASSIGNMENTS_STORAGE_KEY, JSON.stringify(list)); } catch { /* ignore */ }
           },
-          (error) => handleFirestoreError(error, OperationType.LIST, 'assignments')
+          (error) => console.error('RTDB student assignments listener error:', error)
         )
       );
     }
@@ -823,7 +847,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (missionId) setActiveMissionId(missionId);
     setAllUsers(prev => {
       const updated = prev.map(u => u.id === currentUserId ? { ...u, kobiPosition: nodeId } : u);
-      try { const userRef = doc(db, 'users', currentUserId); setDoc(userRef, { kobiPosition: nodeId }, { merge: true }); } catch { /* ignore */ }
+      try { update(ref(database, 'users/' + currentUserId), { kobiPosition: nodeId }); } catch { /* ignore */ }
       persistUsers(updated);
       return updated;
     });
@@ -863,7 +887,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const updated = prev.map(u => {
         if (u.id === currentUserId) {
           const userUpdated = { ...u, settings: { ...u.settings, ...newSettings } };
-          try { const userRef = doc(db, 'users', currentUserId); setDoc(userRef, { settings: userUpdated.settings }, { merge: true }); } catch { /* ignore */ }
+          try { update(ref(database, 'users/' + currentUserId), { settings: userUpdated.settings }); } catch { /* ignore */ }
           return userUpdated;
         }
         return u;
@@ -1045,8 +1069,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         createdBy: { uid: currentUser.id, name: currentUser.name, role: currentUser.role, username: currentUser.username },
         missionId: data.missionId
       };
-      try { const asgRef = doc(db, 'assignments', newId); await setDoc(asgRef, newAssignment); }
-      catch (err) { handleFirestoreError(err, OperationType.WRITE, 'assignments'); }
+      try { await set(ref(database, 'assignments/' + newId), newAssignment); }
+      catch (err) { console.error('RTDB assignment write error:', err); }
       setAssignments(prev => { const updated = [newAssignment, ...prev]; try { localStorage.setItem(ASSIGNMENTS_STORAGE_KEY, JSON.stringify(updated)); } catch { /* ignore */ } return updated; });
       audioService.playSuccessSound();
       return { success: true };
@@ -1055,8 +1079,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const deleteAssignment = async (assignmentId: string): Promise<{ success: boolean; message?: string }> => {
     try {
-      try { const asgRef = doc(db, 'assignments', assignmentId); await deleteDoc(asgRef); }
-      catch (err) { handleFirestoreError(err, OperationType.DELETE, `assignments/${assignmentId}`); }
+      try { await remove(ref(database, 'assignments/' + assignmentId)); }
+      catch (err) { console.error('RTDB assignment delete error:', err); }
       setAssignments(prev => { const updated = prev.filter(a => a.id !== assignmentId); try { localStorage.setItem(ASSIGNMENTS_STORAGE_KEY, JSON.stringify(updated)); } catch { /* ignore */ } return updated; });
       audioService.playSnapSound();
       return { success: true };
@@ -1081,9 +1105,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const avatarType = data.avatarType || (avatarUrl.startsWith('data:') ? 'custom' : avatarUrl ? 'preset' : 'initial');
       const updatedAt = new Date().toISOString();
       try {
-        const userDocRef = doc(db, 'users', userId);
-        await setDoc(userDocRef, { name: cleanName, fullName: cleanName, nickname: cleanNickname, displayName: cleanDisplayName, avatar: avatarUrl, avatarUrl: avatarUrl, avatarType, bio: cleanBio, updatedAt }, { merge: true });
-      } catch (err) { handleFirestoreError(err, OperationType.UPDATE, `users/${userId}`); }
+        await update(ref(database, 'users/' + userId), { name: cleanName, fullName: cleanName, nickname: cleanNickname, displayName: cleanDisplayName, avatar: avatarUrl, avatarUrl: avatarUrl, avatarType, bio: cleanBio, updatedAt });
+      } catch (err) { console.error('RTDB profile update error:', err); }
       setAllUsers(prev => {
         const updated = prev.map(u => u.id === userId ? { ...u, name: cleanName, fullName: cleanName, nickname: cleanNickname, displayName: cleanDisplayName, avatar: avatarUrl, avatarUrl: avatarUrl, avatarType, bio: cleanBio, updatedAt } : u);
         persistUsers(updated);
