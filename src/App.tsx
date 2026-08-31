@@ -16,6 +16,31 @@ import { LeaderboardPage } from './components/student/LeaderboardPage';
 import { TeacherDashboard } from './components/teacher/TeacherDashboard';
 import { AdminDashboard } from './components/admin/AdminDashboard';
 import { ChangePasswordModal } from './components/auth/ChangePasswordModal';
+const AuthLoadingScreen: React.FC = () => (
+  <div className="min-h-screen flex flex-col items-center justify-center bg-[#f9f9ff] gap-4">
+    <div className="w-14 h-14 border-4 border-[#adc6ff] border-t-[#0058be] rounded-full animate-spin" />
+    <p className="text-sm font-bold text-[#0058be]">Memeriksa sesi CodeNusa...</p>
+  </div>
+);
+
+const AuthErrorScreen: React.FC<{ error: string }> = ({ error }) => {
+  const { logout } = useApp();
+  return (
+    <div className="min-h-screen flex flex-col items-center justify-center bg-[#f9f9ff] p-6 gap-4">
+      <div className="w-full max-w-md bg-white rounded-3xl border-2 border-red-200 shadow-xl p-8 text-center space-y-4">
+        <div className="w-14 h-14 mx-auto bg-red-50 text-red-600 rounded-2xl flex items-center justify-center text-2xl">⚠️</div>
+        <h2 className="font-['Plus_Jakarta_Sans'] font-extrabold text-xl text-gray-900">Sesi Bermasalah</h2>
+        <p className="text-sm text-gray-600 font-medium">{error}</p>
+        <button
+          onClick={() => logout()}
+          className="w-full py-3 bg-[#0058be] hover:bg-[#2170e4] text-white text-xs font-extrabold rounded-full shadow-md transition-all"
+        >
+          Kembali ke Halaman Masuk
+        </button>
+      </div>
+    </div>
+  );
+};
 
 const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { currentUser } = useApp();
@@ -67,6 +92,16 @@ const RootRedirect: React.FC = () => {
 };
 
 const AppRoutes: React.FC = () => {
+  const { authLoading, authError, isAuthenticated } = useApp();
+
+  if (authLoading) {
+    return <AuthLoadingScreen />;
+  }
+
+  if (authError && !isAuthenticated) {
+    return <AuthErrorScreen error={authError} />;
+  }
+
   return (
     <AppLayout>
       <Routes>
